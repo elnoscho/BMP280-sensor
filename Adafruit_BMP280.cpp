@@ -32,47 +32,11 @@ Adafruit_BMP280::Adafruit_BMP280(TwoWire *theWire) {
   pressure_sensor = new Adafruit_BMP280_Pressure(this);
 }
 
-/*!
- * @brief  BMP280 constructor using hardware SPI
- * @param  cspin
- *         cs pin number
- * @param  theSPI
- *         optional SPI object
- */
-Adafruit_BMP280::Adafruit_BMP280(int8_t cspin, SPIClass *theSPI) {
-  spi_dev = new Adafruit_SPIDevice(cspin, 1000000, SPI_BITORDER_MSBFIRST,
-                                   SPI_MODE0, theSPI);
-  temp_sensor = new Adafruit_BMP280_Temp(this);
-  pressure_sensor = new Adafruit_BMP280_Pressure(this);
-}
-
-/*!
- * @brief  BMP280 constructor using bitbang SPI
- * @param  cspin
- *         The pin to use for CS/SSEL.
- * @param  mosipin
- *         The pin to use for MOSI.
- * @param  misopin
- *         The pin to use for MISO.
- * @param  sckpin
- *         The pin to use for SCK.
- */
-Adafruit_BMP280::Adafruit_BMP280(int8_t cspin, int8_t mosipin, int8_t misopin,
-                                 int8_t sckpin) {
-  spi_dev = new Adafruit_SPIDevice(cspin, sckpin, misopin, mosipin);
-  temp_sensor = new Adafruit_BMP280_Temp(this);
-  pressure_sensor = new Adafruit_BMP280_Pressure(this);
-}
-
 Adafruit_BMP280::~Adafruit_BMP280(void) {
-  if (spi_dev)
-    delete spi_dev;
   if (i2c_dev)
     delete i2c_dev;
-  if (temp_sensor)
-    delete temp_sensor;
-  if (pressure_sensor)
-    delete pressure_sensor;
+  delete temp_sensor;
+  delete pressure_sensor;
 }
 
 /*!
@@ -84,29 +48,24 @@ Adafruit_BMP280::~Adafruit_BMP280(void) {
  *  @return True if the init was successful, otherwise false.
  */
 bool Adafruit_BMP280::begin(uint8_t addr, uint8_t chipid) {
-  if (spi_dev == NULL) {
     // I2C mode
     if (i2c_dev)
-      delete i2c_dev;
+        delete i2c_dev;
     i2c_dev = new Adafruit_I2CDevice(addr, _wire);
     if (!i2c_dev->begin())
-      return false;
-  } else {
-    // SPI mode
-    if (!spi_dev->begin())
-      return false;
-  }
+        return false;
 
-  // check if sensor, i.e. the chip ID is correct
-  _sensorID = read8(BMP280_REGISTER_CHIPID);
-  if (_sensorID != chipid)
+
+    // check if sensor, i.e. the chip ID is correct
+    _sensorID = read8(BMP280_REGISTER_CHIPID);
+    if (_sensorID != chipid)
     return false;
 
-  readCoefficients();
-  // write8(BMP280_REGISTER_CONTROL, 0x3F); /* needed? */
-  setSampling();
-  delay(100);
-  return true;
+    readCoefficients();
+    // write8(BMP280_REGISTER_CONTROL, 0x3F); /* needed? */
+    setSampling();
+    delay(100);
+    return true;
 }
 
 /*!
@@ -127,8 +86,6 @@ void Adafruit_BMP280::setSampling(sensor_mode mode,
                                   sensor_sampling pressSampling,
                                   sensor_filter filter,
                                   standby_duration duration) {
-  if (!_sensorID)
-    return; // begin() not called yet
   _measReg.mode = mode;
   _measReg.osrs_t = tempSampling;
   _measReg.osrs_p = pressSampling;
@@ -151,9 +108,6 @@ void Adafruit_BMP280::write8(byte reg, byte value) {
   if (i2c_dev) {
     buffer[0] = reg;
     i2c_dev->write(buffer, 2);
-  } else {
-    buffer[0] = reg & ~0x80;
-    spi_dev->write(buffer, 2);
   }
 }
 
@@ -168,10 +122,8 @@ uint8_t Adafruit_BMP280::read8(byte reg) {
   if (i2c_dev) {
     buffer[0] = uint8_t(reg);
     i2c_dev->write_then_read(buffer, 1, buffer, 1);
-  } else {
-    buffer[0] = uint8_t(reg | 0x80);
-    spi_dev->write_then_read(buffer, 1, buffer, 1);
   }
+
   return buffer[0];
 }
 
@@ -184,10 +136,8 @@ uint16_t Adafruit_BMP280::read16(byte reg) {
   if (i2c_dev) {
     buffer[0] = uint8_t(reg);
     i2c_dev->write_then_read(buffer, 1, buffer, 2);
-  } else {
-    buffer[0] = uint8_t(reg | 0x80);
-    spi_dev->write_then_read(buffer, 1, buffer, 2);
   }
+
   return uint16_t(buffer[0]) << 8 | uint16_t(buffer[1]);
 }
 
@@ -214,12 +164,40 @@ uint32_t Adafruit_BMP280::read24(byte reg) {
   if (i2c_dev) {
     buffer[0] = uint8_t(reg);
     i2c_dev->write_then_read(buffer, 1, buffer, 3);
-  } else {
-    buffer[0] = uint8_t(reg | 0x80);
-    spi_dev->write_then_read(buffer, 1, buffer, 3);
   }
+
   return uint32_t(buffer[0]) << 16 | uint32_t(buffer[1]) << 8 |
          uint32_t(buffer[2]);
+}
+
+/*!
+ *  @brief  Take a new measurement (only possible in forced mode)
+    @returns true in case of success else false
+ */
+bool Adafruit_BMP280::takeForcedMeasurement(void) {
+  bool return_value = false;
+  // If we are in forced mode, the BME sensor goes back to sleep after each
+  // measurement and we need to set it to forced mode once at this point, so
+  // it will take the next measurement and then return to sleep again.
+  // In normal mode simply does new measurements periodically.
+  if (_measReg.mode == MODE_FORCED) {
+    return_value = true;
+    // set to forced mode, i.e. "take next measurement"
+    write8(BMP280_REGISTER_CONTROL, _measReg.get());
+    // Store current time to measure the timeout
+    uint32_t timeout_start = millis();
+    // wait until measurement has been completed, otherwise we would read the
+    // the values from the last measurement or the timeout occurred after 2 sec.
+    while (read8(BMP280_REGISTER_STATUS) & 0x08) {
+      // In case of a timeout, stop the while loop
+      if ((millis() - timeout_start) > 2000) {
+        return_value = false;
+        break;
+      }
+      delay(1);
+    }
+  }
+  return return_value;
 }
 
 /*!
@@ -243,30 +221,26 @@ void Adafruit_BMP280::readCoefficients() {
 
 /*!
  * Reads the temperature from the device.
- * @return The temperature in degrees celsius.
+ * @return The temperature in degress celcius.
  */
-float Adafruit_BMP280::readTemperature() {
-  int32_t var1, var2;
-  if (!_sensorID)
-    return NAN; // begin() not called yet
+int32_t Adafruit_BMP280::readTemperature() {  // war mal float
+  int32_t var1, var2, T;
 
   int32_t adc_T = read24(BMP280_REGISTER_TEMPDATA);
   adc_T >>= 4;
 
   var1 = ((((adc_T >> 3) - ((int32_t)_bmp280_calib.dig_T1 << 1))) *
-          ((int32_t)_bmp280_calib.dig_T2)) >>
-         11;
+           ((int32_t)_bmp280_calib.dig_T2)) >> 11;
 
   var2 = (((((adc_T >> 4) - ((int32_t)_bmp280_calib.dig_T1)) *
-            ((adc_T >> 4) - ((int32_t)_bmp280_calib.dig_T1))) >>
-           12) *
-          ((int32_t)_bmp280_calib.dig_T3)) >>
-         14;
+            ((adc_T >> 4) - ((int32_t)_bmp280_calib.dig_T1))) >> 12) *
+            ((int32_t)_bmp280_calib.dig_T3)) >> 14;
 
   t_fine = var1 + var2;
 
-  float T = (t_fine * 5 + 128) >> 8;
-  return T / 100;
+  T = ((t_fine * 5 + 128) >> 8) + 27315; // in Kelvin * 100 (nur einmal in main durch 100 dividieren)
+
+  return T;
 }
 
 /*!
@@ -275,8 +249,6 @@ float Adafruit_BMP280::readTemperature() {
  */
 float Adafruit_BMP280::readPressure() {
   int64_t var1, var2, p;
-  if (!_sensorID)
-    return NAN; // begin() not called yet
 
   // Must be done first to get the t_fine variable set up
   readTemperature();
@@ -324,7 +296,7 @@ float Adafruit_BMP280::readAltitude(float seaLevelhPa) {
 }
 
 /*!
- * Calculates the pressure at sea level (QNH) from the specified altitude,
+ * Calculates the pressure at sea level (QFH) from the specified altitude,
  * and atmospheric pressure (QFE).
  * @param  altitude      Altitude in m
  * @param  atmospheric   Atmospheric pressure in hPa
@@ -351,27 +323,6 @@ float Adafruit_BMP280::waterBoilingPoint(float pressure) {
   // pressure
   return (234.175 * log(pressure / 6.1078)) /
          (17.08085 - log(pressure / 6.1078));
-}
-
-/*!
-    @brief  Take a new measurement (only possible in forced mode)
-    @return true if successful, otherwise false
- */
-bool Adafruit_BMP280::takeForcedMeasurement() {
-  // If we are in forced mode, the BME sensor goes back to sleep after each
-  // measurement and we need to set it to forced mode once at this point, so
-  // it will take the next measurement and then return to sleep again.
-  // In normal mode simply does new measurements periodically.
-  if (_measReg.mode == MODE_FORCED) {
-    // set to forced mode, i.e. "take next measurement"
-    write8(BMP280_REGISTER_CONTROL, _measReg.get());
-    // wait until measurement has been completed, otherwise we would read
-    // the values from the last measurement
-    while (read8(BMP280_REGISTER_STATUS) & 0x08)
-      delay(1);
-    return true;
-  }
-  return false;
 }
 
 /*!

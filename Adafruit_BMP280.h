@@ -25,7 +25,6 @@
 #include <Arduino.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_I2CDevice.h>
-#include <Adafruit_SPIDevice.h>
 // clang-format on
 
 /*!
@@ -180,8 +179,6 @@ public:
   };
 
   Adafruit_BMP280(TwoWire *theWire = &Wire);
-  Adafruit_BMP280(int8_t cspin, SPIClass *theSPI = &SPI);
-  Adafruit_BMP280(int8_t cspin, int8_t mosipin, int8_t misopin, int8_t sckpin);
   ~Adafruit_BMP280(void);
 
   bool begin(uint8_t addr = BMP280_ADDRESS, uint8_t chipid = BMP280_CHIPID);
@@ -189,26 +186,27 @@ public:
   uint8_t getStatus(void);
   uint8_t sensorID(void);
 
-  float readTemperature();
+  int32_t readTemperature();
   float readPressure(void);
   float readAltitude(float seaLevelhPa = 1013.25);
   float seaLevelForAltitude(float altitude, float atmospheric);
   float waterBoilingPoint(float pressure);
-  bool takeForcedMeasurement();
 
   Adafruit_Sensor *getTemperatureSensor(void);
   Adafruit_Sensor *getPressureSensor(void);
 
+  // void takeForcedMeasurement();
   void setSampling(sensor_mode mode = MODE_NORMAL,
                    sensor_sampling tempSampling = SAMPLING_X16,
                    sensor_sampling pressSampling = SAMPLING_X16,
                    sensor_filter filter = FILTER_OFF,
                    standby_duration duration = STANDBY_MS_1);
 
+    bool takeForcedMeasurement(void);
+
 private:
   TwoWire *_wire;                     /**< Wire object */
   Adafruit_I2CDevice *i2c_dev = NULL; ///< Pointer to I2C bus interface
-  Adafruit_SPIDevice *spi_dev = NULL; ///< Pointer to SPI bus interface
 
   Adafruit_BMP280_Temp *temp_sensor = NULL;
   Adafruit_BMP280_Pressure *pressure_sensor = NULL;
@@ -245,7 +243,6 @@ private:
   };
 
   void readCoefficients(void);
-  uint8_t spixfer(uint8_t x);
   void write8(byte reg, byte value);
   uint8_t read8(byte reg);
   uint16_t read16(byte reg);
@@ -258,7 +255,6 @@ private:
 
   int32_t _sensorID = 0;
   int32_t t_fine;
-  // int8_t _cs, _mosi, _miso, _sck;
   bmp280_calib_data _bmp280_calib;
   config _configReg;
   ctrl_meas _measReg;
